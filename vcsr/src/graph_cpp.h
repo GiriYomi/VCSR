@@ -795,24 +795,57 @@ class CSRGraph {
 
   // # EVOLVE-BLOCK-START
   // calculate starting index of each vertex for the range of vertices based on the degree of vertices
-  int64_t *calculate_positions_V1(int32_t start_vertex, int32_t end_vertex, int64_t gaps, int64_t total_degree) {
-    int32_t size = end_vertex - start_vertex;
-    int64_t *new_index = (int64_t *) calloc(size, sizeof(int64_t));
-    total_degree += size;
+  int64_t *calculate_positions_V1(int32_t start_vertex, int32_t end_vertex,
+                                 int64_t gaps, int64_t /*total_degree*/) {
+    const int32_t n = end_vertex - start_vertex;
+    int64_t *new_index = (int64_t *)calloc(n, sizeof(int64_t));
+    if (n <= 0) return new_index;
 
-    double index_d = vertices_[start_vertex].index;
-    double step = ((double) gaps) / total_degree;  //per-edge step
-    for (int i = start_vertex; i < end_vertex; i++){
-      new_index[i-start_vertex] = index_d;
-      //cout << index_d << " " << new_index[i-start_vertex] << " " << vertices_[i-1].index << " " << vertices_[i-1].degree << endl;
-      if(i > start_vertex) {
-        //printf("v[%d] with degree %d gets actual space %ld\n", i-1, vertices_[i-1].degree, (new_index[i-start_vertex]-new_index[i-start_vertex-1]));
-        assert(new_index[i-start_vertex] >= new_index[(i-1)-start_vertex] + vertices_[i-1].degree && "Edge-list can not be overlapped with the neighboring vertex!");
-      }
-//      index_d += (vertices_[i].degree + (step * vertices_[i].degree));
-      index_d += (vertices_[i].degree + (step * (vertices_[i].degree + 1)));
+    // Skew detection (cheap): if a single vertex owns >=25% of window edges.
+    uint64_t sumdeg = 0, maxdeg = 0;
+    for (int32_t v = start_vertex; v < end_vertex; ++v) {
+      const uint64_t d = (uint64_t)vertices_[v].degree;
+      sumdeg += d;
+      if (d > maxdeg) maxdeg = d;
     }
+    const bool skewed = (maxdeg * 4u >= (sumdeg ? sumdeg : 1u));
 
+    // Exact integer apportionment of 'gaps'.
+    // Base weight is concave (stable): (deg+1) + 2*sqrt(deg+1)
+    // If skewed, add mild linear bump (+deg) to favor hubs (reduces insert shifts).
+    uint64_t wsum = 0;
+    for (int32_t v = start_vertex; v < end_vertex; ++v) {
+      const uint64_t d = (uint64_t)vertices_[v].degree;
+      const uint64_t d1 = d + 1u;
+      uint64_t w = d1 + 2u * (uint64_t)std::sqrt((double)d1);
+      if (skewed) w += d;
+      wsum += w;
+    }
+    if (wsum == 0) wsum = 1;
+
+    int64_t idx = vertices_[start_vertex].index;
+    __uint128_t rem = 0;
+
+    for (int32_t v = start_vertex; v < end_vertex; ++v) {
+      const int32_t k = v - start_vertex;
+      new_index[k] = idx;
+
+      if (k > 0) {
+        assert(new_index[k] >= new_index[k - 1] + vertices_[v - 1].degree &&
+               "Edge-list can not be overlapped with the neighboring vertex!");
+      }
+
+      const uint64_t d = (uint64_t)vertices_[v].degree;
+      const uint64_t d1 = d + 1u;
+      uint64_t w = d1 + 2u * (uint64_t)std::sqrt((double)d1);
+      if (skewed) w += d;
+
+      const __uint128_t prod = (__uint128_t)gaps * (__uint128_t)w + rem;
+      const uint64_t g = (uint64_t)(prod / (__uint128_t)wsum);
+      rem = prod - (__uint128_t)g * (__uint128_t)wsum;
+
+      idx += (int64_t)d + (int64_t)g;
+    }
     return new_index;
   }
   // # EVOLVE-BLOCK-END

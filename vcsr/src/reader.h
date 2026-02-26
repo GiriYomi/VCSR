@@ -64,7 +64,8 @@ class Reader {
     TimestampT_ t = 0;
 //    NodeWeight<NodeID_, WeightT_, TimestampT_> v;
     while (in >> u >> v >> w) {
-      el.push_back(Edge(u, NodeWeight<NodeID_, WeightT_, TimestampT_>(v, w, t)));
+      // weight fixed to 1 — our graph does not need edge weights
+      el.push_back(Edge(u, NodeWeight<NodeID_, WeightT_, TimestampT_>(v, 1, t)));
       t += 1;
     }
     return el;

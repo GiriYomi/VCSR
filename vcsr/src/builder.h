@@ -340,6 +340,7 @@ class BuilderBase {
     }
     t.Stop();
     cout << "D-Graph Build Time: " << t.Seconds() << " seconds." << endl;
+    g.PrintMetrics();
 
     return g;
   }

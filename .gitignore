@@ -54,3 +54,8 @@ dkms.conf
 # ide specific settings
 .idea
 .vscode
+
+openevolve_output*/
+*.log
+0_dgap_evolve/
+data/

@@ -128,20 +128,12 @@ class Generator {
 
   static void InsertWeights(pvector<EdgePair<NodeID_, NodeID_>> &el) {}
 
-  // Overwrites existing weights with random from [1,255]
+  // Set all edge weights to 1 — our graph does not need edge weights
   static void InsertWeights(pvector<WEdge> &el) {
-    #pragma omp parallel
-    {
-      std::mt19937 rng;
-      std::uniform_int_distribution<int> udist(1, 255);
-      int64_t el_size = el.size();
-      #pragma omp for
-      for (int64_t block=0; block < el_size; block+=block_size) {
-        rng.seed(kRandSeed + block/block_size);
-        for (int64_t e=block; e < std::min(block+block_size, el_size); e++) {
-          el[e].v.w = static_cast<WeightT_>(udist(rng)+1);    // to make sure weight is not zero
-        }
-      }
+    int64_t el_size = el.size();
+    #pragma omp parallel for
+    for (int64_t e = 0; e < el_size; e++) {
+      el[e].v.w = static_cast<WeightT_>(1);
     }
   }
 

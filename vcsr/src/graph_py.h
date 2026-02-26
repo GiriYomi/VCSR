@@ -11,6 +11,7 @@
 #include <type_traits>
 #include <stdio.h>
 #include <cstdlib>
+#include <cmath>
 #include <assert.h>
 #include <inttypes.h>
 #include <vector>
@@ -794,25 +795,79 @@ class CSRGraph {
   }
 
   // # EVOLVE-BLOCK-START
-  // calculate starting index of each vertex for the range of vertices based on the degree of vertices
+  // Python best program translated to C++: hub-aware + occupancy-tuned uniform split
   int64_t *calculate_positions_V1(int32_t start_vertex, int32_t end_vertex, int64_t gaps, int64_t total_degree) {
     int32_t size = end_vertex - start_vertex;
     int64_t *new_index = (int64_t *) calloc(size, sizeof(int64_t));
-    total_degree += size;
+    if (size <= 0) return new_index;
 
-    double index_d = vertices_[start_vertex].index;
-    double step = ((double) gaps) / total_degree;  //per-edge step
-    for (int i = start_vertex; i < end_vertex; i++){
-      new_index[i-start_vertex] = index_d;
-      //cout << index_d << " " << new_index[i-start_vertex] << " " << vertices_[i-1].index << " " << vertices_[i-1].degree << endl;
-      if(i > start_vertex) {
-        //printf("v[%d] with degree %d gets actual space %ld\n", i-1, vertices_[i-1].degree, (new_index[i-start_vertex]-new_index[i-start_vertex-1]));
-        assert(new_index[i-start_vertex] >= new_index[(i-1)-start_vertex] + vertices_[i-1].degree && "Edge-list can not be overlapped with the neighboring vertex!");
+    // Fast path: no gaps to distribute, tightly pack by degree
+    if (gaps <= 0 || total_degree <= 0) {
+      double index_d = (double)vertices_[start_vertex].index;
+      for (int32_t i = start_vertex; i < end_vertex; i++) {
+        int32_t off = i - start_vertex;
+        new_index[off] = (int64_t)index_d;
+        if (i > start_vertex) {
+          assert(new_index[off] >= new_index[off - 1] + vertices_[i - 1].degree && "Edge-list overlap!");
+        }
+        index_d += (double)vertices_[i].degree;
       }
-//      index_d += (vertices_[i].degree + (step * vertices_[i].degree));
-      index_d += (vertices_[i].degree + (step * (vertices_[i].degree + 1)));
+      return new_index;
     }
 
+    // Local mean degree for the window and occupancy ratio
+    double local_mean = (double)total_degree / (double)size;
+    if (local_mean < 1.0) local_mean = 1.0;
+    double denom_occ = (double)(total_degree + gaps);
+    double occ = (denom_occ > 0.0) ? ((double)total_degree / denom_occ) : 0.0;
+
+    // Occupancy-tuned parameters
+    double uniform_frac = 0.16 + 0.14 * occ;
+    if (uniform_frac < 0.10) uniform_frac = 0.10;
+    if (uniform_frac > 0.30) uniform_frac = 0.30;
+
+    double hub_alpha = 0.28;
+    double r_clamp = 6.0 - 2.0 * occ;
+    if (r_clamp < 3.5) r_clamp = 3.5;
+    if (r_clamp > 8.0) r_clamp = 8.0;
+
+    // First pass: compute hub-aware weights
+    double *weights = (double *)calloc(size, sizeof(double));
+    double sum_w = 0.0;
+    double denom = local_mean + 1.0;
+    for (int32_t i = start_vertex; i < end_vertex; i++) {
+      double d = (double)vertices_[i].degree;
+      double base = d + 1.0;
+      double r = (d + 1.0) / denom;
+      double r_eff;
+      if (r < 1.0) r_eff = 1.0;
+      else if (r <= r_clamp) r_eff = r;
+      else r_eff = r_clamp;
+      double hub_factor = 1.0 + hub_alpha * (sqrt(r_eff) - 1.0);
+      double w = base * hub_factor;
+      int32_t off = i - start_vertex;
+      weights[off] = w;
+      sum_w += w;
+    }
+
+    // Split gaps into uniform and weighted portions
+    double g_uniform = (double)gaps * uniform_frac;
+    double g_weighted = (double)gaps - g_uniform;
+    double uniform_step = (size > 0) ? (g_uniform / (double)size) : 0.0;
+    double weighted_scale = (sum_w > 0.0 && g_weighted > 0.0) ? (g_weighted / sum_w) : 0.0;
+
+    // Second pass: assign new starting indices
+    double index_d = (double)vertices_[start_vertex].index;
+    for (int32_t i = start_vertex; i < end_vertex; i++) {
+      int32_t off = i - start_vertex;
+      new_index[off] = (int64_t)index_d;
+      if (i > start_vertex) {
+        assert(new_index[off] >= new_index[off - 1] + vertices_[i - 1].degree && "Edge-list overlap!");
+      }
+      index_d += (double)vertices_[i].degree + uniform_step + (weighted_scale * weights[off]);
+    }
+
+    free(weights);
     return new_index;
   }
   // # EVOLVE-BLOCK-END
