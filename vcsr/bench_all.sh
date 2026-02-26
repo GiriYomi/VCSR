@@ -16,7 +16,7 @@ set -euo pipefail
 
 RUNS="${1:-3}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-DATA_DIR="/mnt/nvme/datasets-dgap"
+DATA_DIR="/mnt/nvme/dataset-dgap/evolve-test"
 SRC_DIR="$SCRIPT_DIR/src"
 
 GRAPH_H="$SRC_DIR/graph.h"
@@ -101,20 +101,17 @@ restore_graph_h() {
 }
 trap restore_graph_h EXIT
 
-# ---- Helper: compute median of array ----
-median() {
-    printf '%s\n' "$@" | sort -g | awk '
-        { a[NR] = $1 }
-        END { print a[int((NR+1)/2)] }
-    '
+# ---- Helper: compute mean of array ----
+mean() {
+    printf '%s\n' "$@" | awk '{ s += $1 } END { printf "%.6f", s / NR }'
 }
 
 # ---- Results storage ----
 # results_time[version|dataset]="t1 t2 t3"
-# results_median[version|dataset]="median_val"
+# results_mean[version|dataset]="median_val"
 # results_metrics[version|dataset|metric]="val"
 declare -A results_time
-declare -A results_median
+declare -A results_mean
 declare -A results_metrics
 
 METRICS_LIST=(total_writes total_reads num_write_insert num_read_insert num_write_rebal num_read_rebal num_write_resize num_read_resize num_rebalance num_resize)
@@ -154,7 +151,7 @@ for vi in "${!VERSION_ORDER[@]}"; do
 
         times=()
         for ((r=1; r<=RUNS; r++)); do
-            output=$(./bfs -B "$base_file" -D "$dyn_file" -s -n 1 -r 0 2>&1) || {
+            output=$(taskset --cpu-list 0-70:2 ./bfs -B "$base_file" -D "$dyn_file" -s -n 1 -r 0 2>&1) || {
                 echo -ne "${RED}X${NC}"
                 continue
             }
@@ -176,10 +173,10 @@ for vi in "${!VERSION_ORDER[@]}"; do
         done
 
         if [ ${#times[@]} -gt 0 ]; then
-            med=$(median "${times[@]}")
+            avg=$(mean "${times[@]}")
             results_time["${v}|${ds}"]="${times[*]}"
-            results_median["${v}|${ds}"]="$med"
-            echo -e " median=${BOLD}${med}s${NC}"
+            results_mean["${v}|${ds}"]="$avg"
+            echo -e " mean=${BOLD}${avg}s${NC}"
         else
             echo -e " ${RED}ALL RUNS FAILED${NC}"
         fi
@@ -195,7 +192,7 @@ echo -e "${BOLD}============================================${NC}"
 
 # ---- Table 1: Runtime ----
 echo ""
-echo -e "${BOLD}=== Runtime (seconds, median of $RUNS runs) ===${NC}"
+echo -e "${BOLD}=== Runtime (seconds, mean of $RUNS runs) ===${NC}"
 echo ""
 printf "%-30s  %12s  %12s  %8s  %12s  %8s\n" \
     "Dataset" "Baseline" "Py-in-C++" "vs BL" "C++ Evolved" "vs BL"
@@ -203,9 +200,9 @@ printf "%-30s  %12s  %12s  %8s  %12s  %8s\n" \
     "------------------------------" "------------" "------------" "--------" "------------" "--------"
 
 for ds in "${DATASETS[@]}"; do
-    bl="${results_median[baseline|${ds}]:-N/A}"
-    py="${results_median[py_in_cpp|${ds}]:-N/A}"
-    ce="${results_median[cpp_evolved|${ds}]:-N/A}"
+    bl="${results_mean[baseline|${ds}]:-N/A}"
+    py="${results_mean[py_in_cpp|${ds}]:-N/A}"
+    ce="${results_mean[cpp_evolved|${ds}]:-N/A}"
 
     # compute vs baseline %
     py_vs="N/A"
@@ -288,9 +285,9 @@ for ds in "${DATASETS[@]}"; do
     bl_w="${results_metrics[baseline|${ds}|total_writes]:-}"
     py_w="${results_metrics[py_in_cpp|${ds}|total_writes]:-}"
     ce_w="${results_metrics[cpp_evolved|${ds}|total_writes]:-}"
-    bl_t="${results_median[baseline|${ds}]:-}"
-    py_t="${results_median[py_in_cpp|${ds}]:-}"
-    ce_t="${results_median[cpp_evolved|${ds}]:-}"
+    bl_t="${results_mean[baseline|${ds}]:-}"
+    py_t="${results_mean[py_in_cpp|${ds}]:-}"
+    ce_t="${results_mean[cpp_evolved|${ds}]:-}"
 
     py_score="N/A"
     ce_score="N/A"
