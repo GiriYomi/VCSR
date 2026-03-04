@@ -4,7 +4,9 @@
 #
 #  Usage:  bash bench_all.sh [RUNS]    (default 3 runs per dataset)
 #
-#  Data directory: /mnt/nvme/datasets-dgap
+#  Data directories:
+#    - DATA_DIR  (default: /mnt/nvme/dataset-dgap/evolve-test) for original datasets
+#    - REPO_DATA (default: ../data) for TGB-sx processed datasets
 #  Three versions:
 #    1) Baseline     — original graph.h
 #    2) Py-in-C++    — graph_py.h  (Python-evolved algo translated to C++)
@@ -17,6 +19,7 @@ set -euo pipefail
 RUNS="${1:-3}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 DATA_DIR="/mnt/nvme/dataset-dgap/evolve-test"
+REPO_DATA="$(cd "$SCRIPT_DIR/.." && pwd)/data"
 SRC_DIR="$SCRIPT_DIR/src"
 
 GRAPH_H="$SRC_DIR/graph.h"
@@ -32,22 +35,40 @@ CYAN='\033[0;36m'
 BOLD='\033[1m'
 NC='\033[0m'
 
-# ---- Auto-detect datasets ----
-# Find all .base.el files in DATA_DIR and extract prefixes
-DATASETS=()
-DATASET_NAMES=()
-for f in "$DATA_DIR"/*.base.el; do
+# ---- Auto-detect datasets from multiple directories ----
+DATASETS=()        # dataset prefix (used as key)
+declare -A DATASET_DIR  # maps prefix -> directory containing the files
+
+add_datasets_from() {
+    local dir="$1"
+    [ -d "$dir" ] || return
+    for f in "$dir"/*.base.el; do
+        [ -f "$f" ] || continue
+        local prefix
+        prefix=$(basename "$f" .base.el)
+        local dyn="$dir/${prefix}.dynamic.el"
+        if [ -f "$dyn" ] && [ -z "${DATASET_DIR[$prefix]:-}" ]; then
+            DATASETS+=("$prefix")
+            DATASET_DIR["$prefix"]="$dir"
+        fi
+    done
+}
+
+# Scan primary data dir (original datasets)
+add_datasets_from "$DATA_DIR"
+# Scan repo data dir (TGB-sx processed datasets — only *-sx files)
+for f in "$REPO_DATA"/*-sx.base.el; do
     [ -f "$f" ] || continue
     prefix=$(basename "$f" .base.el)
-    dyn="$DATA_DIR/${prefix}.dynamic.el"
-    if [ -f "$dyn" ]; then
+    dyn="$REPO_DATA/${prefix}.dynamic.el"
+    if [ -f "$dyn" ] && [ -z "${DATASET_DIR[$prefix]:-}" ]; then
         DATASETS+=("$prefix")
-        DATASET_NAMES+=("$prefix")
+        DATASET_DIR["$prefix"]="$REPO_DATA"
     fi
 done
 
 if [ ${#DATASETS[@]} -eq 0 ]; then
-    echo -e "${RED}ERROR: No datasets found in $DATA_DIR${NC}"
+    echo -e "${RED}ERROR: No datasets found in $DATA_DIR or $REPO_DATA${NC}"
     echo "  Expected files like: <name>.base.el and <name>.dynamic.el"
     exit 1
 fi
@@ -69,12 +90,14 @@ echo -e "${BOLD}============================================${NC}"
 echo -e "${BOLD} VCSR Full Benchmark${NC}"
 echo -e "${BOLD}============================================${NC}"
 echo ""
-echo -e "  Data dir:   ${CYAN}$DATA_DIR${NC}"
+echo -e "  Data dirs:  ${CYAN}$DATA_DIR${NC}"
+echo -e "              ${CYAN}$REPO_DATA${NC} (TGB-sx)"
 echo -e "  Runs:       ${CYAN}$RUNS${NC} per dataset"
 echo -e "  Datasets:   ${CYAN}${#DATASETS[@]}${NC}"
 for ds in "${DATASETS[@]}"; do
-    base_size=$(du -h "$DATA_DIR/${ds}.base.el" | cut -f1)
-    dyn_size=$(du -h "$DATA_DIR/${ds}.dynamic.el" | cut -f1)
+    ds_dir="${DATASET_DIR[$ds]}"
+    base_size=$(du -h "$ds_dir/${ds}.base.el" | cut -f1)
+    dyn_size=$(du -h "$ds_dir/${ds}.dynamic.el" | cut -f1)
     echo -e "    - $ds  (base: ${base_size}, dynamic: ${dyn_size})"
 done
 echo -e "  Versions:   ${CYAN}3${NC} (Baseline, Py-in-C++, C++ Evolved)"
@@ -144,8 +167,9 @@ for vi in "${!VERSION_ORDER[@]}"; do
     echo -e "${GREEN}OK${NC}"
 
     for ds in "${DATASETS[@]}"; do
-        base_file="$DATA_DIR/${ds}.base.el"
-        dyn_file="$DATA_DIR/${ds}.dynamic.el"
+        ds_dir="${DATASET_DIR[$ds]}"
+        base_file="$ds_dir/${ds}.base.el"
+        dyn_file="$ds_dir/${ds}.dynamic.el"
 
         echo -ne "  ${CYAN}${ds}${NC} "
 
